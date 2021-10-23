@@ -29,6 +29,13 @@
 
 namespace Stockfish {
 
+//  enum Stages {
+//    MAIN_TT, CAPTURE_INIT, GOOD_CAPTURE, REFUTATION, QUIET_INIT, QUIET, BAD_CAPTURE,
+//    EVASION_TT, EVASION_INIT, EVASION,
+//    PROBCUT_TT, PROBCUT_INIT, PROBCUT,
+//    QSEARCH_TT, QCAPTURE_INIT, QCAPTURE, QCHECK_INIT, QCHECK, FINAL
+//  };
+
 /// StatsEntry stores the stat table value. It is usually a number but could
 /// be a move or even a nested history. We use a class instead of naked value
 /// to directly call history update operator<<() on the entry so to use stats
@@ -119,6 +126,13 @@ typedef Stats<PieceToHistory, NOT_USED, PIECE_NB, SQUARE_NB> ContinuationHistory
 class MovePicker {
 
   enum PickType { Next, Best };
+  enum Stages {
+    MAIN_TT, CAPTURE_INIT, GOOD_CAPTURE, REFUTATION, QUIET_INIT, QUIET, BAD_CAPTURE,
+    EVASION_TT, EVASION_INIT, EVASION,
+    PROBCUT_TT, PROBCUT_INIT, PROBCUT,
+    QSEARCH_TT, QCAPTURE_INIT, QCAPTURE, QCHECK_INIT, QCHECK, FINAL
+  };
+
 
 public:
   MovePicker(const MovePicker&) = delete;
@@ -138,6 +152,21 @@ public:
   Move next_move(bool skipQuiets = false);
 
 private:
+  Move stage_1(bool skipQuiets = false);
+  Move stage_2(bool skipQuiets = false);
+  Move stage_3(bool skipQuiets = false);
+  Move stage_4(bool skipQuiets = false);
+  Move stage_5(bool skipQuiets = false);
+  Move stage_6(bool skipQuiets = false);
+  Move stage_7(bool skipQuiets = false);
+  Move stage_8(bool skipQuiets = false);
+  Move stage_9(bool skipQuiets = false);
+  Move stage_10(bool skipQuiets = false);
+  Move stage_11(bool skipQuiets = false);
+  Move stage_12(bool skipQuiets = false);
+  Move stage_13(bool skipQuiets = false);
+  Move stage_14(bool skipQuiets = false);
+  Move stage_15(bool skipQuiets = false);
   template<PickType T, typename Pred> Move select(Pred);
   template<GenType> void score();
   ExtMove* begin() { return cur; }
@@ -148,6 +177,7 @@ private:
   const LowPlyHistory* lowPlyHistory;
   const CapturePieceToHistory* captureHistory;
   const PieceToHistory** continuationHistory;
+//  Move (*stages[14])();
   Move ttMove;
   ExtMove refutations[3], *cur, *endMoves, *endBadCaptures;
   int stage;
@@ -156,8 +186,31 @@ private:
   Depth depth;
   int ply;
   ExtMove moves[MAX_MOVES];
+  Move (MovePicker::*stages[19])(bool) = {
+		[MAIN_TT]	= &MovePicker::stage_1,
+		[EVASION_TT]	= &MovePicker::stage_1,
+		[QSEARCH_TT]	= &MovePicker::stage_1,
+		[PROBCUT_TT]	= &MovePicker::stage_1,
+		[CAPTURE_INIT]	= &MovePicker::stage_2,
+		[PROBCUT_INIT]	= &MovePicker::stage_2,
+		[QCAPTURE_INIT]	= &MovePicker::stage_2,
+  		[GOOD_CAPTURE]	= &MovePicker::stage_3,
+  		[REFUTATION]	= &MovePicker::stage_4,
+		[QUIET_INIT]	= &MovePicker::stage_5,
+		[QUIET]		= &MovePicker::stage_6,
+  		[BAD_CAPTURE]	= &MovePicker::stage_7,
+		[EVASION_INIT]	= &MovePicker::stage_8,
+		[EVASION]	= &MovePicker::stage_9,
+		[PROBCUT]	= &MovePicker::stage_10,
+		[QCAPTURE]	= &MovePicker::stage_11,
+		[QCHECK_INIT]	= &MovePicker::stage_12,
+		[QCHECK]	= &MovePicker::stage_13,
+		[FINAL]		= &MovePicker::stage_14,
+   };
 };
 
-} // namespace Stockfish
+
+
+}// namespace Stockfish
 
 #endif // #ifndef MOVEPICK_H_INCLUDED

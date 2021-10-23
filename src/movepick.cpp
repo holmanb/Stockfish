@@ -28,8 +28,9 @@ namespace {
     MAIN_TT, CAPTURE_INIT, GOOD_CAPTURE, REFUTATION, QUIET_INIT, QUIET, BAD_CAPTURE,
     EVASION_TT, EVASION_INIT, EVASION,
     PROBCUT_TT, PROBCUT_INIT, PROBCUT,
-    QSEARCH_TT, QCAPTURE_INIT, QCAPTURE, QCHECK_INIT, QCHECK
+    QSEARCH_TT, QCAPTURE_INIT, QCAPTURE, QCHECK_INIT, QCHECK, FINAL
   };
+
 
   // partial_insertion_sort() sorts moves in descending order up to and including
   // a given limit. The order of moves smaller than the limit is left unspecified.
@@ -56,7 +57,7 @@ namespace {
 /// ordering is at the current node.
 
 /// MovePicker constructor for the main search
-MovePicker::MovePicker(const Position& p, Move ttm, Depth d, const ButterflyHistory* mh, const LowPlyHistory* lp,
+Stockfish::MovePicker::MovePicker(const Position& p, Move ttm, Depth d, const ButterflyHistory* mh, const LowPlyHistory* lp,
                        const CapturePieceToHistory* cph, const PieceToHistory** ch, Move cm, const Move* killers, int pl)
            : pos(p), mainHistory(mh), lowPlyHistory(lp), captureHistory(cph), continuationHistory(ch),
              ttMove(ttm), refutations{{killers[0], 0}, {killers[1], 0}, {cm, 0}}, depth(d), ply(pl) {
@@ -143,33 +144,24 @@ Move MovePicker::select(Pred filter) {
   return MOVE_NONE;
 }
 
-/// MovePicker::next_move() is the most important method of the MovePicker class. It
-/// returns a new pseudo-legal move every time it is called until there are no more
-/// moves left, picking the move with the highest score from a list of generated moves.
-Move MovePicker::next_move(bool skipQuiets) {
+Move MovePicker::stage_1(bool skipQuiets) {
+	++stage;
+	return ttMove;
+}
 
-top:
-  switch (stage) {
-
-  case MAIN_TT:
-  case EVASION_TT:
-  case QSEARCH_TT:
-  case PROBCUT_TT:
-      ++stage;
-      return ttMove;
-
-  case CAPTURE_INIT:
-  case PROBCUT_INIT:
-  case QCAPTURE_INIT:
+Move MovePicker::stage_2(bool skipQuiets) {
       cur = endBadCaptures = moves;
       endMoves = generate<CAPTURES>(pos, cur);
 
       score<CAPTURES>();
       ++stage;
-      goto top;
 
-  case GOOD_CAPTURE:
-      if (select<Best>([&](){
+      // goto top
+      return next_move();
+}
+
+Move MovePicker::stage_3(bool skipQuiets) {
+      if (select<Best>([this](){
                        return pos.see_ge(*cur, Value(-69 * cur->value / 1024)) ?
                               // Move losing capture to endBadCaptures to be tried later
                               true : (*endBadCaptures++ = *cur, false); }))
@@ -185,17 +177,23 @@ top:
           --endMoves;
 
       ++stage;
-      [[fallthrough]];
 
-  case REFUTATION:
+      // fallthrough
+      return stage_4(skipQuiets);
+}
+
+Move MovePicker::stage_4(bool skipQuiets) {
       if (select<Next>([&](){ return    *cur != MOVE_NONE
                                     && !pos.capture(*cur)
                                     &&  pos.pseudo_legal(*cur); }))
           return *(cur - 1);
       ++stage;
-      [[fallthrough]];
 
-  case QUIET_INIT:
+      // fallthrough
+      return stage_5(skipQuiets);
+}
+
+Move MovePicker::stage_5(bool skipQuiets) {
       if (!skipQuiets)
       {
           cur = endBadCaptures;
@@ -206,9 +204,10 @@ top:
       }
 
       ++stage;
-      [[fallthrough]];
+      return stage_6(skipQuiets);
+}
 
-  case QUIET:
+Move MovePicker::stage_6(bool skipQuiets) {
       if (   !skipQuiets
           && select<Next>([&](){return   *cur != refutations[0].move
                                       && *cur != refutations[1].move
@@ -220,26 +219,31 @@ top:
       endMoves = endBadCaptures;
 
       ++stage;
-      [[fallthrough]];
+      return stage_7(skipQuiets);
+}
 
-  case BAD_CAPTURE:
-      return select<Next>([](){ return true; });
+Move MovePicker::stage_7(bool skipQuiets) {
+	return select<Next>([](){ return true; });
+}
 
-  case EVASION_INIT:
+Move MovePicker::stage_8(bool skipQuiets) {
       cur = moves;
       endMoves = generate<EVASIONS>(pos, cur);
 
       score<EVASIONS>();
       ++stage;
-      [[fallthrough]];
+      return stage_9(skipQuiets);
+}
 
-  case EVASION:
+Move MovePicker::stage_9(bool skipQuiets) {
       return select<Best>([](){ return true; });
+}
 
-  case PROBCUT:
+Move MovePicker::stage_10(bool skipQuiets) {
       return select<Best>([&](){ return pos.see_ge(*cur, threshold); });
+}
 
-  case QCAPTURE:
+Move MovePicker::stage_11(bool skipQuiets) {
       if (select<Best>([&](){ return   depth > DEPTH_QS_RECAPTURES
                                     || to_sq(*cur) == recaptureSquare; }))
           return *(cur - 1);
@@ -249,21 +253,153 @@ top:
           return MOVE_NONE;
 
       ++stage;
-      [[fallthrough]];
+      return stage_12(skipQuiets);
+}
 
-  case QCHECK_INIT:
+Move MovePicker::stage_12(bool skipQuiets) {
       cur = moves;
       endMoves = generate<QUIET_CHECKS>(pos, cur);
 
       ++stage;
-      [[fallthrough]];
-
-  case QCHECK:
-      return select<Next>([](){ return true; });
-  }
-
-  assert(false);
-  return MOVE_NONE; // Silence warning
+      return stage_13(skipQuiets);
 }
+
+Move MovePicker::stage_13(bool skipQuiets) {
+      return select<Next>([](){ return true; });
+}
+
+Move MovePicker::stage_14(bool skipQuiets) {
+  assert(false);
+  return MOVE_NONE;
+}
+
+/// MovePicker::next_move() is the most important method of the MovePicker class. It
+/// returns a new pseudo-legal move every time it is called until there are no more
+/// moves left, picking the move with the highest score from a list of generated moves.
+Move MovePicker::next_move(bool skipQuiets) {
+
+	/* Rather than have a bunch of case statements which consist of a bunch
+	 * of conditional jumps, this accomplishes effectively the same thing.
+	 */
+	return (*this.*stages[stage])(skipQuiets);
+}
+
+//top:
+//  switch (stage) {
+
+//  case MAIN_TT:
+//  case EVASION_TT:
+//  case QSEARCH_TT:
+//  case PROBCUT_TT:
+//      ++stage;
+//      return ttMove;
+
+//  case CAPTURE_INIT:
+//  case PROBCUT_INIT:
+//  case QCAPTURE_INIT:
+//      cur = endBadCaptures = moves;
+//      endMoves = generate<CAPTURES>(pos, cur);
+//
+//      score<CAPTURES>();
+//      ++stage;
+//      goto top;
+//
+//  case GOOD_CAPTURE:
+//      if (select<Best>([](){
+//                       return pos.see_ge(*cur, Value(-69 * cur->value / 1024)) ?
+//                              // Move losing capture to endBadCaptures to be tried later
+//                              true : (*endBadCaptures++ = *cur, false); }))
+//          return *(cur - 1);
+//
+//      // Prepare the pointers to loop over the refutations array
+//      cur = std::begin(refutations);
+//      endMoves = std::end(refutations);
+//
+//      // If the countermove is the same as a killer, skip it
+//      if (   refutations[0].move == refutations[2].move
+//          || refutations[1].move == refutations[2].move)
+//          --endMoves;
+//
+//      ++stage;
+//      [[fallthrough]];
+
+//  case REFUTATION:
+//      if (select<Next>([&](){ return    *cur != MOVE_NONE
+//                                    && !pos.capture(*cur)
+//                                    &&  pos.pseudo_legal(*cur); }))
+//          return *(cur - 1);
+//      ++stage;
+//      [[fallthrough]];
+//
+//  case QUIET_INIT:
+//      if (!skipQuiets)
+//      {
+//          cur = endBadCaptures;
+//          endMoves = generate<QUIETS>(pos, cur);
+//
+//          score<QUIETS>();
+//          partial_insertion_sort(cur, endMoves, -3000 * depth);
+//      }
+//
+//      ++stage;
+//      [[fallthrough]];
+
+//  case QUIET:
+//      if (   !skipQuiets
+//          && select<Next>([&](){return   *cur != refutations[0].move
+//                                      && *cur != refutations[1].move
+//                                      && *cur != refutations[2].move;}))
+//          return *(cur - 1);
+//
+//      // Prepare the pointers to loop over the bad captures
+//      cur = moves;
+//      endMoves = endBadCaptures;
+//
+//      ++stage;
+//      [[fallthrough]];
+//
+//  case BAD_CAPTURE:
+//      return select<Next>([](){ return true; });
+
+//  case EVASION_INIT:
+//      cur = moves;
+//      endMoves = generate<EVASIONS>(pos, cur);
+//
+//      score<EVASIONS>();
+//      ++stage;
+//      [[fallthrough]];
+
+//  case EVASION:
+//      return select<Best>([](){ return true; });
+//
+//  case PROBCUT:
+//      return select<Best>([&](){ return pos.see_ge(*cur, threshold); });
+
+//  case QCAPTURE:
+//      if (select<Best>([&](){ return   depth > DEPTH_QS_RECAPTURES
+//                                    || to_sq(*cur) == recaptureSquare; }))
+//          return *(cur - 1);
+//
+//      // If we did not find any move and we do not try checks, we have finished
+//      if (depth != DEPTH_QS_CHECKS)
+//          return MOVE_NONE;
+//
+//      ++stage;
+//      [[fallthrough]];
+
+//  case QCHECK_INIT:
+//      cur = moves;
+//      endMoves = generate<QUIET_CHECKS>(pos, cur);
+//
+//      ++stage;
+//      [[fallthrough]];
+
+//  case QCHECK:
+//      return select<Next>([](){ return true; });
+//  }
+//
+//  assert(false);
+//  return MOVE_NONE; // Silence warning
+//}
 
 } // namespace Stockfish
